@@ -7,7 +7,7 @@ class AdminUser(permissions.BasePermission):
     Faqat admin (superuser) bo'lgan foydalanuvchilarga ruxsat beradi.
     """
     def has_permission(self, request, view):
-        return request.user and request.user.is_authenticated and request.user.is_superuser
+        return request.user and request.user.is_authenticated and request.user.is_admin
 
 
 class IsAdminOrReadOnly(BasePermission):

@@ -9,7 +9,7 @@ from django.contrib.auth.hashers import make_password
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.views import APIView
 from drf_yasg.utils import swagger_auto_schema
-from rest_framework_simplejwt.views import TokenRefreshView
+from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView, TokenBlacklistView
 from .models import *
 from .serializers import *
 from django.db.models import Q
@@ -88,6 +88,13 @@ class StudentStatisticView(generics.GenericAPIView):
             student_count = Student.objects.filter(created__range=[start_date, end_date]).count()
             return Response({"student_count": student_count}, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+class TeacherGroupListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, teacher_id):
+        groups = Group.objects.filter(teacher__id=teacher_id)
+        serializer = GroupSerializer(groups, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 class TeacherStatisticView(generics.GenericAPIView):
     serializer_class = TeacherStatisticSerializer
@@ -204,7 +211,16 @@ class TeacherListView(ListAPIView):
     queryset = Teacher.objects.all()
     pagination_class = PageNumberPagination
     permission_classes = [AdminUser]
- 
+class TeacherListCreateAPIView(generics.ListCreateAPIView):
+    queryset = Teacher.objects.all()
+    serializer_class = TeacherSerializer
+    permission_classes = [IsAuthenticated]
+
+class TeacherRetrieveUpdateDestroyAPIView(generics.RetrieveUpdateDestroyAPIView):
+    queryset = Teacher.objects.all()
+    serializer_class = TeacherSerializer
+    permission_classes = [IsAuthenticated]
+
 # --- Authentication Views ---
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -251,9 +267,46 @@ class AttendanceViewSet(viewsets.ModelViewSet):
     serializer_class = AttendanceSerializer
 
 # --- Courses ViewSet ---
-class CourseViewSet(viewsets.ModelViewSet):
-    queryset = Course.objects.all()
-    serializer_class = CourseSerializer
+class CourseViewSet(viewsets.ViewSet):
+    permission_classes = [AdminUser]
+
+    def list(self, request):
+        courses = Course.objects.all()
+        paginator = PageNumberPagination()
+        result_page = paginator.paginate_queryset(courses, request)
+        serializer = CourseSerializer(result_page, many=True)
+        return Response(serializer.data)
+
+    def retrieve(self, request, pk=None):
+        course = get_object_or_404(Course, pk=pk)
+        serializer = SubjectSerializer(course)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['post'], url_path='create/course')
+    @swagger_auto_schema(request_body=CourseSerializer)
+    def create_course(self, request):
+        serializer = CourseSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['put'], url_path='update/course')
+    @swagger_auto_schema(request_body=CourseSerializer)
+    def update_course(self, request, pk=None):
+        course = get_object_or_404(Subject, pk=pk)
+        serializer = CourseSerializer(course, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['delete'], url_path='delete/course')
+    def delete_course(self, request, pk=None):
+        course = get_object_or_404(Course, pk=pk)
+        course.delete()
+        return Response({'status':True,'detail': 'Cource muaffaqiyatli uchirildi'}, status=status.HTTP_204_NO_CONTENT)
+
 
 # --- Groups ViewSet ---
 class GroupViewSet(viewsets.ModelViewSet):
@@ -414,6 +467,20 @@ class ChangePasswordView(APIView):
 
 
 class LoginAPIView(APIView):
+    """
+    Foydalanuvchi login API'si
+    """
+    @staticmethod
+    def get_tokens_for_user(user):
+        """
+        Foydalanuvchi uchun JWT tokenlarni yaratish
+        """
+        refresh = RefreshToken.for_user(user)
+        return {
+            'refresh': str(refresh),
+            'access': str(refresh.access_token),
+        }
+
     @swagger_auto_schema(request_body=LoginSerializer)
     def post(self, request):
         phone = request.data.get("phone")
@@ -422,23 +489,29 @@ class LoginAPIView(APIView):
         user = User.objects.filter(phone=phone).first()
 
         if user and user.check_password(password):
-            refresh = RefreshToken.for_user(user)
-            return Response({
-                "refresh": str(refresh),
-                "access": str(refresh.access_token),
-            })
+            tokens = self.get_tokens_for_user(user)
+            return Response(tokens, status=status.HTTP_200_OK)
 
-        return Response({"status": False, "detail": "Telefon raqam yoki parol noto‘g‘ri"}, status=status.HTTP_401_UNAUTHORIZED)
+        return Response(
+            {"status": False, "detail": "Telefon raqam yoki parol noto‘g‘ri"},
+            status=status.HTTP_401_UNAUTHORIZED
+        )
+
 
 class LogoutView(APIView):
+    """
+    Foydalanuvchini tizimdan chiqarish (logout)
+    """
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
         try:
-            refresh_token = request.data["refresh"]
+            refresh_token = request.data.get("refresh")
             token = RefreshToken(refresh_token)
-            token.blacklist() 
-            return Response({"message": "Logout successful"}, status=status.HTTP_200_OK)
+            token.blacklist()  # 🔹 Tokenni qora ro‘yxatga qo‘shish
+
+            return Response({"message": "Logout muvaffaqiyatli bajarildi"}, status=status.HTTP_200_OK)
+
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -541,26 +614,54 @@ class ProtectedAPIView(APIView):
 #             return Response(teacher_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class TeacherCreateAPIView(APIView):
-    permission_classes = [AdminUser]  
+    permission_classes = [AdminUser]
 
     @swagger_auto_schema(request_body=UserAndTeacherSerializer)
     def post(self, request):
-        serializer = UserAndTeacherSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response({"message": "Teacher muvaffaqiyatli yaratildi"}, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        user_data = request.data.get('user', {})
+        user_serializer = UserSerializer(data=user_data)
+
+        if user_serializer.is_valid():
+            user = user_serializer.save(is_teacher=True)
+        else:
+            return Response(user_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        teacher_data = request.data.get('teacher', {})   
+        teacher_serializer = TeacherSerializer(data=teacher_data)
+
+        if teacher_serializer.is_valid():
+            teacher_serializer.save(user=user)
+            return Response(teacher_serializer.data, status=status.HTTP_201_CREATED)
+
+        else:
+            user.delete()
+            return Response(teacher_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 
 class StudentCreateAPIView(APIView):
-    permission_classes = [AdminUser]  
+    permission_classes = [AdminUser]
 
     @swagger_auto_schema(request_body=UserAndStudentSerializer)
     def post(self, request):
-        serializer = UserAndStudentSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response({"message": "Student muvaffaqiyatli yaratildi"}, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        user_data = request.data.get('user', {})
+        user_serializer = UserSerializer(data=user_data)
+
+        if user_serializer.is_valid():
+            user = user_serializer.save(is_student=True)
+        else:
+            return Response(user_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        student_data = request.data.get('student', {})
+        student_serializer = StudentSerializer(data=student_data)
+
+        if student_serializer.is_valid():
+            student = student_serializer.save(user=user)
+            return Response(student_serializer.data, status=status.HTTP_201_CREATED)
+
+        else:
+            user.delete()
+            return Response(student_serializer.errors,status=status.HTTP_400_BAD_REQUEST)
 
 
 class StudentGroupsView(APIView):
@@ -573,14 +674,26 @@ class StudentGroupsView(APIView):
         return Response(serializer.data)
 
 
-class StudentAttendanceListView(ListAPIView):
+class StudentAttendanceListView(generics.ListAPIView):
     serializer_class = AttendanceSerializer
     permission_classes = [IsAuthenticated]
     pagination_class = PageNumberPagination
 
     def get_queryset(self):
-        return Attendance.objects.filter(student=self.request.user.student)
+        student_id = self.kwargs['student_id']
+        return Attendance.objects.filter(student__id=student_id)
 
+
+class StudentListCreateAPIView(generics.ListCreateAPIView):
+    queryset = Student.objects.all()
+    serializer_class = StudentSerializer
+    permission_classes = [IsAuthenticated]
+
+class StudentRetrieveUpdateDestroyAPIView(generics.RetrieveUpdateDestroyAPIView):
+    queryset = Student.objects.all()
+    serializer_class = StudentSerializer
+    permission_classes = [IsAuthenticated]
+    
 class CurrentUserView(RetrieveAPIView):
     serializer_class = MeSerializer
     permission_classes = [IsAuthenticated]
@@ -588,6 +701,43 @@ class CurrentUserView(RetrieveAPIView):
     def get_object(self):
         return self.request.user
     
+class DecoratedTokenObtainPairView(TokenObtainPairView):
+    @swagger_auto_schema(
+        responses={
+            status.HTTP_200_OK: TokenObtainPairResponseSerializer,
+        }
+    )
+    def post(self, request, *args, **kwargs):
+        return super().post(request, *args, **kwargs)
+
+class DecoratedTokenRefreshView(TokenRefreshView):
+    @swagger_auto_schema(
+        responses={
+            status.HTTP_200_OK: TokenRefreshResponseSerializer,
+        }
+    )
+    def post(self, request, *args, **kwargs):
+        return super().post(request, *args, **kwargs)
+
+
+class DecoratedTokenVerifyView(TokenVerifyView):
+    @swagger_auto_schema(
+        responses={
+            status.HTTP_200_OK: TokenVerifyResponseSerializer,
+        }
+    )
+    def post(self, request, *args, **kwargs):
+        return super().post(request, *args, **kwargs)
+
+
+class DecoratedTokenBlacklistView(TokenBlacklistView):
+    @swagger_auto_schema(
+        responses={
+            status.HTTP_200_OK: TokenBlacklistResponseSerializer,
+        }
+    )
+    def post(self, request, *args, **kwargs):
+        return super().post(request, *args, **kwargs)
 
 # class StudentCreateAPIView(APIView):
 #     permission_classes = [AdminUser]

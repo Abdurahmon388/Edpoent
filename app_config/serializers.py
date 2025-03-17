@@ -5,10 +5,59 @@ from django.contrib.auth.hashers import check_password
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from django.contrib.auth.hashers import make_password
 
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework_simplejwt.views import TokenObtainPairView
+
 User = get_user_model()
 
 # --- Authentication Serializers ---
 
+class TokenObtainPairResponseSerializer(serializers.Serializer):
+    access = serializers.CharField()
+    refresh = serializers.CharField()
+
+    def create(self, validated_data):
+        raise NotImplementedError()
+
+    def update(self, instance, validated_data):
+        raise NotImplementedError()
+    
+
+
+class TokenRefreshResponseSerializer(serializers.Serializer):
+    access = serializers.CharField()
+
+    def create(self, validated_data):
+        raise NotImplementedError()
+
+    def update(self, instance, validated_data):
+        raise NotImplementedError()
+
+
+class TokenVerifyResponseSerializer(serializers.Serializer):
+    def create(self, validated_data):
+        raise NotImplementedError()
+
+    def update(self, instance, validated_data):
+        raise NotImplementedError()
+    
+
+class TokenBlacklistResponseSerializer(serializers.Serializer):
+    def create(self, validated_data):
+        raise NotImplementedError()
+
+    def update(self, instance, validated_data):
+        raise NotImplementedError()
+class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
+    @classmethod
+    def get_token(cls, user):
+        token = super().get_token(user)
+
+        # Add custom claims
+        token['name'] = user.name
+        # ...
+
+        return token
 
 class UserAllSerializer(serializers.ModelSerializer):
     class Meta:
@@ -252,3 +301,9 @@ class CourseStatisticSerializer(serializers.Serializer):
 class GroupStatisticSerializer(serializers.Serializer):
     start_date = serializers.DateField()
     end_date = serializers.DateField()
+    
+
+class SubjectSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Subject
+        fields = '__all__'
